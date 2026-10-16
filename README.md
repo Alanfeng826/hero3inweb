@@ -8,9 +8,9 @@
 > 本仓库提供的是**可运行的网页版外壳**：VCMI 引擎（WASM）、官方网页启动器、以及本项目做的
 > **简体中文汉化补丁**。不包含任何《英雄无敌 III》的游戏资源文件。
 >
-> **游戏资源请自备**（需持有正版《英雄无敌 III：完整版》）。把下列 7 个文件放到
-> 仓库根目录下的 `game-data/`（该目录已被 `.gitignore` 排除），或按第一节的说明在
-> 启动器里直接指向你本机的游戏目录。
+> **游戏资源请自备**（需持有正版《英雄无敌 III：完整版》）。把下列 7 个文件放进
+> 仓库根目录下的 **`Data/`**（该目录已被 `.gitignore` 排除）即可——页面会**自动识别并装载**，
+> 不必再手动选择；也可以按第一节的说明在启动器里直接指向你本机的游戏目录。
 >
 > 换机器 / 重新克隆后照样能跑，只要那边有 H3 游戏资源即可。
 
@@ -27,8 +27,11 @@
 首次进入按提示操作：
 
 1. **版本** 选 `1.6.5-wasm-2`（默认已选好）
-2. **游戏文件** 区域点下方文件夹图标，选中下面 **7 个文件**
-   （一般位于游戏安装目录的 `Data\` 子目录下）：
+2. **游戏文件**
+   - 若 `Data/` 目录里已备好资源 → 页面**自动装载**，直接显示「所有文件已就绪」。
+     下载期间页面底部有一条进度浮层，装完自动消失。
+   - 若没有 `Data/` 目录 → 点文件夹图标手动选中下面 **7 个文件**
+     （一般位于游戏安装目录的 `Data\` 子目录下）：
 
    | 文件 | 大小 |
    |---|---|
@@ -42,9 +45,12 @@
 
 3. 点 **下一步** → 选择分辨率 → 点 **开始游戏**
 
-> 文件只需选一次。选完后会存进浏览器（IndexedDB），下次打开直接点「下一步」就能玩。
-> 要重新选择，点「游戏文件」旁边的 **清除** 即可。
+> 资源只需放一次：以后换电脑、换浏览器、清缓存，页面都会自动重新装载
+> （浏览器里已有缓存时直接命中，一个字节都不用重新下载）。
 > 启动器界面与游戏界面**都已是简体中文**；想切回英文见第五节。
+
+本地版同样支持这套自动装载 —— 把 7 个文件拷进 `homm3-web\Data\` 即可。
+服务器部署（https://prdshare.online/hero3inweb/ ）的做法见**第九节**。
 
 ---
 
@@ -72,10 +78,11 @@ homm3-web/
 ├─ 启动英雄无敌3.cmd      ← 双击这个
 ├─ serve.js               ← 零依赖本地静态服务器（Node）
 ├─ index.html             ← 入口页
-├─ keyboard.png
+├─ autoload.js            ← 服务器资源自动装载（见第九节）
+├─ demo.jpg / keyboard.png
 ├─ .gitignore             ← 排除游戏资源（*.lod / *.snd / *.VID 等）
 ├─ .gitattributes
-├─ game-data/             ← 【自备】游戏资源放这里（已被 git 忽略，不随仓库分发）
+├─ Data/                  ← 【自备】游戏资源放这里，页面会自动装载（已被 git 忽略）
 └─ vcmi/                  ← 引擎产物（约 57 MB）
    ├─ vcmiclient.1.6.5-0.js / .wasm    引擎内核
    ├─ vcmi.data.1.6.5-zh / .js         引擎界面数据（已注入中文字体）
@@ -90,7 +97,8 @@ homm3-web/
       ├─ vcmi-launcher.js.bak-ui       启动器界面改中文前的副本（回滚界面用）
       ├─ vcmi-launcher.js.nolang       仅去掉「语言补丁」的副本（语言回滚用）
       ├─ vcmi-launcher.js.orig         dos.zone 原始副本（仅供参照，勿直接覆盖）
-      └─ main_bg_image.jpg
+      ├─ main_bg_image.jpg
+      └─ tg_logo.svg / discord_logo.svg
 ```
 
 > ⚠️ `vcmi-launcher.js.orig` 是**从 dos.zone 抓下来的原始文件**，里面带着防自托管跳转。
@@ -235,3 +243,92 @@ if (meta === null || bin === null) { /* 只有缓存缺失才联网下载 */ }
 - 启动器产物来自 dos.zone 的 `vcmi-html5-launcher`
 
 游戏资源版权归原权利人，本方案仅读取你本机已安装的《英雄无敌 III：完整版》，不复制、不分发。
+
+---
+
+## 九、服务器部署（资源预置 · 免手动选文件）
+
+线上地址：**https://prdshare.online/hero3inweb/**
+
+### 9.1 部署形态
+
+纯静态站点，用 **nginx `alias` 直接托管**（与同机 `/kb/`、`/m3e-canvas/` 一个模式），**不占 pm2 端口**：
+
+| 项 | 值 |
+|---|---|
+| 站点目录 | `/var/www/hero3inweb/` |
+| 资源目录 | `/var/www/hero3inweb/Data/` |
+| nginx | `sites-available/prdshare.online` 里三条 location：`= /hero3inweb`（301）、`/hero3inweb/Data/`（目录索引）、`/hero3inweb/`（alias） |
+
+两个**必需**的响应头（缺了引擎起不来）：
+
+| 响应头 | 值 | 为什么必需 |
+|---|---|---|
+| `Cross-Origin-Opener-Policy` | `same-origin` | 引擎 wasm 用了 **pthreads**（JS 里 226 处 `pthread`、2 处 `SharedArrayBuffer`），必须 `crossOriginIsolated === true` 才能拿到共享内存 |
+| `Cross-Origin-Embedder-Policy` | `require-corp` | 同上 |
+
+> ⚠️ nginx 陷阱：**location 内一旦写了 `add_header`，就不再继承 server 级的同名指令**。
+> 所以 `/hero3inweb/` 这个 location 里把 server 级的安全头原样补了一份，避免被吃掉。
+
+另外 `http` 级原来只写了 `gzip on` 而 `gzip_types` 被注释掉（默认只压 `text/html`），
+所以在 location 里补了 `gzip_types` —— `vcmi-launcher.js`(380 KB) 与 wasm(8.6 MB) 才吃得到压缩。
+
+### 9.2 Data/ 目录与自动装载
+
+把 7 个游戏资源文件放进 `/var/www/hero3inweb/Data/`，页面打开时就会**自动装载**，不用再手动选文件。
+
+工作原理（`autoload.js`，**不修改启动器任何代码**）：
+
+1. 启动器的"从设备上传文件"是一个 `<input type="file" name="game-file">`，按「文件名（小写）」识别所需的 7 个文件；
+2. 页面加载后，脚本从 `Data/` 取到这些文件（浏览器里已有缓存则直接命中，不走网络）；
+3. 就地构造成 `File` 对象**投递给同一个输入框**并触发 `change`；
+4. 自此交给启动器自己的流程 —— 校验、写入 IndexedDB、界面切换到「所有文件已就绪」。
+
+`Data/` 下另开一个 **JSON 目录索引**（`autoindex_format json`），页面靠它拿到文件清单：
+
+| 措施 | 原因 |
+|---|---|
+| `autoindex_format json` | 页面需要文件清单才能自动装载 |
+| `gzip off` | `.lod/.snd/.vid` 本身已高度压缩，再压既浪费 CPU，又会吃掉 `Content-Length`，让进度条失准 |
+
+脚本的**降级行为**（一律静默，绝不干扰原有的手动选文件流程）：
+
+| 情形 | 行为 |
+|---|---|
+| 目录索引不可用（换主机、nginx 没配） | 退回逐个文件名探测（HEAD），大小写变体都试 |
+| `Data/` 不存在或里面没有可识别的资源 | 直接退出，启动器自带的手动选文件入口照旧可用 |
+| 加了 `?autoload=0` | 关闭自动装载 |
+| 下载中途失败 | 中止并提示，转手动选择 |
+
+### 9.3 上传 / 更新游戏资源
+
+在本机（资源位于 `D:\game\Heroes3\Data\`）：
+
+```bash
+cd "/d/game/Heroes3/Data"
+tar cf - H3bitmap.lod H3sprite.lod H3ab_bmp.lod VIDEO.VID Heroes3.snd H3ab_spr.lod H3ab_ahd.snd \
+| ssh -i ~/.ssh/id_ed25519 ubuntu@150.158.53.45 \
+  'sudo tar xf - -C /var/www/hero3inweb/Data/ && sudo chown -R www-data:www-data /var/www/hero3inweb/Data/'
+```
+
+上完**不用重启任何服务**，刷新页面即生效。文件名大小写不敏感（脚本按小写匹配）；
+即使把整个 `Data` 目录层级一起传上去（形成 `Data/Data/`），脚本也会自动下探一层。
+
+> 资源换了版本也不用担心旧缓存：脚本会比对服务器文件大小与浏览器缓存的差异，
+> 大小不一致就重新下载覆盖。
+
+### 9.4 回滚
+
+```bash
+ls /etc/nginx/sites-available/ | grep bak-hero3inweb          # 列出备份
+sudo cp <备份文件> /etc/nginx/sites-available/prdshare.online
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+不想要自动装载：删掉 `autoload.js`，以及 `index.html` 里的 `<script defer src="autoload.js"></script>` 那一行即可。
+
+### 9.5 注意
+
+`Data/` 目录是**公网可直接访问**的（`https://prdshare.online/hero3inweb/Data/H3bitmap.lod` 能直接下载）。
+仅适合自用，不建议对外宣传这个地址。若要挡一下，可在该 location 里加 `allow/deny` 限制来源 IP
+—— 但那样换个网络就进不去，取舍自定。

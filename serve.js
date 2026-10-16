@@ -44,10 +44,37 @@ const server = http.createServer((req, res) => {
   if (!filePath.startsWith(ROOT)) { res.writeHead(403); return res.end('forbidden'); }
 
   fs.stat(filePath, (err, st) => {
-    if (err || !st.isFile()) {
+    if (err || (!st.isFile() && !st.isDirectory())) {
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
       return res.end('404 Not Found: ' + urlPath);
     }
+
+    // 目录索引 —— 与 nginx 的 autoindex_format json 对齐，
+    // 供 autoload.js 读取 Data/ 目录里放好的游戏资源（本地版同样免手动选文件）。
+    if (st.isDirectory()) {
+      if (!urlPath.endsWith('/')) {
+        res.writeHead(301, { Location: urlPath + '/' });
+        return res.end();
+      }
+      return fs.readdir(filePath, { withFileTypes: true }, (e2, entries) => {
+        if (e2) { res.writeHead(500); return res.end('readdir failed'); }
+        const list = entries
+          .filter((d) => !d.name.startsWith('.'))
+          .map((d) => {
+            let size = 0;
+            try { if (d.isFile()) size = fs.statSync(path.join(filePath, d.name)).size; } catch (_) { }
+            return { name: d.name, type: d.isDirectory() ? 'directory' : 'file', size };
+          });
+        const body = Buffer.from(JSON.stringify(list, null, 2), 'utf8');
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Content-Length': body.length,
+          'Cache-Control': 'no-store',
+        });
+        res.end(body);
+      });
+    }
+
     const ext = path.extname(filePath).toLowerCase();
     const type = MIME[ext] || 'application/octet-stream';
     const total = st.size;

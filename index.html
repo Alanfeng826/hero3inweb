@@ -21,6 +21,11 @@
       if (_gl) localStorage.setItem("vcmi.gamelang", _gl);
     } catch (e) { }
   </script>
+  <!-- 服务器资源预载：自动把 Data/ 目录里的游戏资源装入启动器缓存，
+       省去每次开始游戏前手动挑选 7 个文件。可用 ?autoload=0 关闭。
+       Data/ 目录不存在时静默退出，不影响启动器自带的手动选文件流程。 -->
+  <script defer src="autoload.js"></script>
+
   <script type="module" crossorigin src="vcmi/launcher/vcmi-launcher.js"></script>
   <link rel="stylesheet" crossorigin href="vcmi/launcher/vcmi-launcher.css">
 </head>
