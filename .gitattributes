@@ -1,0 +1,24 @@
+# 文本文件按内容自动判定，检出时用 LF
+* text=auto
+
+# Windows 脚本必须保留 CRLF，否则批处理会出错
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# ─────────────────────────────────────────────────────────────
+# 二进制文件：禁止任何换行符转换
+# 注意：无扩展名的引擎数据包开头是文件名清单（文本特征），
+#      若不显式声明为 binary，会被 text=auto 误判并损坏。
+# ─────────────────────────────────────────────────────────────
+*.png binary
+*.jpg binary
+*.wasm binary
+*.lod binary
+*.snd binary
+*.VID binary
+
+vcmi.data binary
+vcmi.data.1.6.5-zh binary
+vcmi.data.1.6.5.orig binary
+vcmi.mods.data.1.6.3 binary
+en.data binary
