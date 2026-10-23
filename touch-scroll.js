@@ -161,6 +161,15 @@
     cv.dispatchEvent(mouseEvent('mousemove', x, y, 0, 0));
   }
 
+  // SDL 只有在收到 mouseover / mouseenter 后才认为鼠标「进入窗口」；
+  // 只发 mousemove 可能让它保持在"焦点在窗口外"的状态，边缘滚动就不触发。
+  // 每次开始贴边前补一次进入事件，代价极小。
+  function ensureHover(cv, x, y) {
+    ['mouseover', 'mouseenter', 'pointerover', 'pointerenter'].forEach(function (t) {
+      try { cv.dispatchEvent(mouseEvent(t, x, y, 0, 0)); } catch (e) { /* ignore */ }
+    });
+  }
+
   function edgeTarget(cv, dir) {
     var m = mapRect(cv);
     var base = cur || homePoint(cv);
@@ -198,6 +207,7 @@
 
     if (heldDir !== dir) {
       heldDir = dir;
+      ensureHover(cv, t.x, t.y);
       sweepTo(cv, t, SWEEP_MS, null);
     } else {
       // 同方向持续，短暂校正即可
