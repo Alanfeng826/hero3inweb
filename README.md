@@ -79,6 +79,7 @@ homm3-web/
 ├─ serve.js               ← 零依赖本地静态服务器（Node）
 ├─ index.html             ← 入口页
 ├─ autoload.js            ← 服务器资源自动装载（见第九节）
+├─ touch-scroll.js        ← 触控板双指滑动 → 地图卷动（见第十节）
 ├─ demo.jpg / keyboard.png
 ├─ .gitignore             ← 排除游戏资源（*.lod / *.snd / *.VID 等）
 ├─ .gitattributes
@@ -332,3 +333,67 @@ sudo nginx -t && sudo systemctl reload nginx
 `Data/` 目录是**公网可直接访问**的（`https://prdshare.online/hero3inweb/Data/H3bitmap.lod` 能直接下载）。
 仅适合自用，不建议对外宣传这个地址。若要挡一下，可在该 location 里加 `allow/deny` 限制来源 IP
 —— 但那样换个网络就进不去，取舍自定。
+
+---
+
+## 十、触控板 / 触屏卷动地图
+
+### 10.1 结论：引擎本身就有这套能力
+
+VCMI 1.6.5 内置了完整的触摸与拖动支持，只是**默认关着**。从引擎数据包的中文翻译表里可以逐条查到：
+
+| 能力 | 设置键 | 游戏内文案 |
+|---|---|---|
+| 左键拖动地图 | `adventureOptions.leftButtonDrag` | 「按住左键移动鼠标将拖动冒险地图视图」 |
+| 右键拖动地图 | `adventureOptions.rightButtonDrag` | 「按住右键移动鼠标将拖动冒险地图视图」 |
+| 平滑地图拖动 | `adventureOptions.smoothDragging` | 「地图拖动会产生柔和的羽化效果」 |
+| 边缘滚动 | `adventureOptions.borderScroll` | 「光标靠近窗口边缘时滚动冒险地图」 |
+| 地图卷动速度 | `adventureOptions.mapScrollSpeed1–6` | 1 非常慢 → **6 即刻** |
+| 两指开合缩放 | `tutorialWindow.decription.MapZooming` | 「两指开合更改地图缩放比例」 |
+| 长按 = 右键 | `tutorialWindow.decription.RightClick` | 「长按要右键单击的元素」 |
+
+**路径：游戏内齿轮（系统选项）→ 冒险地图** 页签。
+
+注意语义差异：VCMI 的「双指」手势是**开合 = 缩放**，**不是**平移；平移地图对应的是「拖动地图」。
+
+### 10.2 Mac 触控板：`touch-scroll.js`
+
+触控板双指滑动在浏览器里产生的是 `wheel` 事件，而引擎没有把滚轮绑到地图卷动。
+`touch-scroll.js` 把它翻译成引擎认识的事件：
+
+| 模式 | URL 参数 | 原理 | 前置条件 |
+|---|---|---|---|
+| `key`（默认） | `?touchscroll=key` | wheel → 合成**方向键按住/释放** | 无（方向键是 H3 原生卷图方式） |
+| `drag` | `?touchscroll=drag` | wheel → 合成**鼠标左键拖动** | 需先开启「左键拖动地图」 |
+| 关闭 | `?touchscroll=0` | 不加载任何逻辑 | — |
+
+实现要点：
+
+- 只在**游戏画布**上生效，启动器页面自动不介入
+- `preventDefault` 掉浏览器自身的页面滚动与触控板**侧滑返回上一页**
+- 手指停下 `HOLD_MS=130ms` 后释放按键；按住期间每 `55ms` 重复派发 `keydown`，
+  以同时兼容「状态式」与「事件式」两种按键处理逻辑
+- 页面失焦 / 切换到后台时强制释放，避免"卡住一直滚"
+
+参数都在文件头部，可按手感调整：`HOLD_MS`（滑行时长）、`REPEAT_MS`（重复间隔）、`MIN_STEP`（触发阈值）。
+
+**回滚**：删掉 `touch-scroll.js` 与 `index.html` 里的
+`<script defer src="touch-scroll.js"></script>` 那一行；或临时在地址后加 `?touchscroll=0`。
+
+### 10.3 iPad / 触屏：走引擎原生路径
+
+不需要额外脚本 —— SDL 的触摸事件默认映射为鼠标，所以：
+
+1. 系统选项 → 冒险地图 → 勾上 **「左键拖动地图」**
+2. 单指拖动地图即可卷动（建议把「地图卷动速度」调到 5–6）
+3. 两指开合缩放
+
+### 10.4 已知限制
+
+- 合成的是 `wheel → 方向键`，**滚动速度由游戏内「地图卷动速度」决定**，不是 1:1 跟手；
+  想要跟手可切 `?touchscroll=drag`。
+- 引擎是否接收到合成事件，取决于它的监听目标。本地已用真实浏览器验证过
+  「wheel → keydown/keyup 正确合成且 `defaultPrevented=true`」；
+  **真机（Mac 触控板）手感需实测微调**，见 10.2 的参数说明。
+- iPad 上能否跑起整个游戏尚未验证：iOS Safari 的 `SharedArrayBuffer` 需要 cross-origin
+  isolated（本站已有 `COOP/COEP`），但 256.62 MiB 资源进 MEMFS 可能触发单页内存上限。
