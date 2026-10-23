@@ -1,62 +1,74 @@
 /* ============================================================================
  * 英雄无敌 III · 网页版 —— 触控板 / 触摸卷动适配 (touch-scroll.js)
  * ----------------------------------------------------------------------------
- * 解决什么问题
- *   Mac 触控板双指滑动在浏览器里产生的是 wheel 事件，引擎没有把滚轮绑到地图卷动。
- *   本脚本把 wheel 翻译成引擎认识的操作，让双指滑动卷动冒险地图。
+ * 背景：Mac 触控板双指滑动在浏览器里产生的是 wheel 事件，而引擎没把滚轮绑到地图卷动。
  *
- * ⚠️ 为什么不翻译成"方向键"
- *   H3 里**方向键控制的是英雄行走，不是卷地图**。VCMI 官方文档写的是
- *   `[LCtrl] + Arrows — scrolls Adventure Map`，带 LCtrl 才是卷地图。
- *   不带 Ctrl 的纯方向键会把英雄走出来 —— 这是踩过的坑，不要再改回去。
+ * 已经验证失败的方案（不要再试）
+ *   ① 纯方向键        → 方向键在 H3 里是**英雄行走**，不是卷地图。
+ *   ② Ctrl + 方向键   → 真机实测同样在移动英雄。VCMI 文档那句
+ *      `[LCtrl] + Arrows — scrolls Adventure Map` 说的是"有窗口盖住地图时"，正常游戏不生效。
+ *
+ * 现在走第三条路：**模拟引擎原生的「光标贴边停留」**
+ *   这是 H3 卷地图的本来机制（也是老冯原本的操作方式）。脚本把合成光标推到
+ *   冒险地图视口的边缘并停住，引擎自己就会开始卷动 —— 不依赖任何游戏设置。
  *
  * 四种模式（URL 参数 ?touchscroll=xxx）
- *   ctrl   （默认）Ctrl + 方向键 → 卷地图。依官方文档，不需要改任何游戏设置。
- *   drag   wheel → 合成**鼠标左键拖动**，1:1 跟手。
- *          需先在「系统选项 → 冒险地图」勾上「左键拖动地图」。
- *   rdrag  wheel → 合成**鼠标右键拖动**，同样 1:1。
- *          需勾上「右键拖动地图」。好处是不会和"左键点地面移动英雄"冲突。
- *   0      关闭（等价于删掉 index.html 里那行 script）
+ *   edge  （默认）合成光标贴到地图视口边缘，触发引擎原生边缘滚动
+ *   drag  合成鼠标左键拖动，1:1 跟手（需开启「左键拖动地图」）
+ *   rdrag 合成鼠标右键拖动，1:1 跟手（需开启「右键拖动地图」）
+ *   0     关闭
  *
- * 关键设计
- *   · 拖拽式（drag / rdrag）是**按位移增量**生效的，所以长距离滑动时做"棘轮"：
- *     指针快撞到画布内边界时，先 mouseup 再从中心重新 mousedown，接着拖。
- *     因为引擎只吃增量、不认绝对坐标，重起手不会让地图跳。
- *   · 松手后把指针送回中心/原位，否则指针停在边缘会误触发引擎自带的「边缘滚动」。
- *   · 全程 preventDefault，挡掉浏览器页面滚动和触控板横滑返回上一页。
+ * 视口比例怎么来的
+ *   对老冯的实机截图（1920×1117）逐像素测量：地图星域边界为
+ *   左 10 / 上 10 / 右 1655 / 下 1055，换算成比例即下方 EDGE_RATIO 的默认值。
+ *   若换了分辨率导致贴边不准，可用 URL 参数覆盖，例如：
+ *     ?touchscroll=edge&er=0.862&eb=0.9445
+ *   （el=左 et=上 er=右 eb=下，都是相对画布宽高的比例）
  * ========================================================================== */
 (function () {
   'use strict';
 
   var Q = new URLSearchParams(location.search);
-  var MODE = (Q.get('touchscroll') || 'ctrl').toLowerCase();
+  var MODE = (Q.get('touchscroll') || 'edge').toLowerCase();
 
   if (MODE === '0' || MODE === 'off' || MODE === 'false') {
     console.log('[H3滚屏] 已通过 ?touchscroll=' + MODE + ' 关闭');
     return;
   }
-  // 兼容旧参数名
-  if (MODE === 'key') MODE = 'ctrl';
-  if (MODE !== 'ctrl' && MODE !== 'drag' && MODE !== 'rdrag') {
-    console.warn('[H3滚屏] 未知模式 ' + MODE + '，回退到 ctrl');
-    MODE = 'ctrl';
+  if (MODE === 'key' || MODE === 'ctrl') {
+    console.warn('[H3滚屏] 方向键方案已证实无效（会移动英雄），改用 edge 模式');
+    MODE = 'edge';
+  }
+  if (MODE !== 'edge' && MODE !== 'drag' && MODE !== 'rdrag') {
+    console.warn('[H3滚屏] 未知模式 ' + MODE + '，回退到 edge');
+    MODE = 'edge';
   }
 
   /* ===== 可调参数 ======================================================== */
 
-  var HOLD_MS = 130;      // 手指停下后继续动作多久
-  var REPEAT_MS = 55;     // 按住期间重复派发 keydown 的间隔
-  var MIN_STEP = 1.5;     // 触发滚动的最小累计位移（像素）
-  var DRAG_SCALE = 1.0;   // 拖拽模式：滚动位移 → 拖动位移的倍率
-  var DRAG_INSET = 0.18;  // 拖拽棘轮阈值：指针进到画布边缘 18% 范围内就重起手
+  var HOLD_MS = 160;      // 手指停下后继续卷多久
+  var REPEAT_MS = 50;     // 停在边缘期间重复校正光标的间隔
+  var MIN_STEP = 1.5;     // 触发卷动的最小累计位移（像素）
+  var EDGE_DEPTH = 4;     // 光标停在地图视口边缘往里多少像素
+  var SWEEP_MS = 110;     // 光标扫到边缘的时长（中途会穿过触发区，容错更好）
+  var BACK_MS = 90;       // 收尾时光标回到原位的时长
+  var DRAG_SCALE = 1.0;   // 拖拽模式位移倍率
+  var DRAG_INSET = 0.18;  // 拖拽棘轮阈值
 
-  var ARROW = {
-    up:    { code: 38, key: 'ArrowUp' },
-    down:  { code: 40, key: 'ArrowDown' },
-    left:  { code: 37, key: 'ArrowLeft' },
-    right: { code: 39, key: 'ArrowRight' }
+  // 地图视口相对画布的比例（默认值来自 1920×1117 实机截图测量）
+  var EDGE_RATIO = {
+    left:   num(Q.get('el'), 0.0052),
+    top:    num(Q.get('et'), 0.0090),
+    right:  num(Q.get('er'), 0.8620),
+    bottom: num(Q.get('eb'), 0.9445)
   };
-  var CTRL = { code: 17, key: 'Control' };
+
+  function num(v, d) {
+    var n = parseFloat(v);
+    return isFinite(n) && n > 0 && n < 1.2 ? n : d;
+  }
+
+  var BTN = MODE === 'rdrag' ? { button: 2, mask: 2 } : { button: 0, mask: 1 };
 
   /* ===== 工具 ============================================================ */
 
@@ -64,6 +76,8 @@
     try { console.log.apply(console, ['[H3滚屏]'].concat([].slice.call(arguments))); }
     catch (e) { /* ignore */ }
   }
+
+  function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
 
   function getCanvas() {
     var c = document.getElementById('canvas');
@@ -88,24 +102,6 @@
     try { Object.defineProperty(ev, name, { get: function () { return val; } }); } catch (e) { }
   }
 
-  function keyEvent(type, k, withCtrl) {
-    var ev;
-    try {
-      ev = new KeyboardEvent(type, {
-        key: k.key, code: k.key,
-        ctrlKey: !!withCtrl, bubbles: true, cancelable: true, view: window
-      });
-    } catch (err) {
-      ev = document.createEvent('Event');
-      ev.initEvent(type, true, true);
-    }
-    // 构造器不接受 keyCode/which，只能事后补（老式处理逻辑读这两个）
-    defProp(ev, 'keyCode', k.code);
-    defProp(ev, 'which', k.code);
-    defProp(ev, 'ctrlKey', !!withCtrl);
-    return ev;
-  }
-
   function mouseEvent(type, x, y, button, buttons) {
     var ev;
     try {
@@ -123,97 +119,126 @@
     return ev;
   }
 
-  // 派发到画布且 bubbles=true：一次覆盖 canvas / document / window 三种注册方式
-  function dispatch(ev) {
-    var t = getCanvas() || document.body || document;
-    t.dispatchEvent(ev);
-  }
-
-  /* ===== 真实指针位置记录（拖拽结束后要送回原处） ======================== */
-
+  // 真实指针位置（只认 isTrusted，避免被自己合成的事件污染）
   var lastReal = null;
-
   window.addEventListener('mousemove', function (e) {
-    if (!e.isTrusted) return;                    // 只记真实事件，忽略自己合成的
-    lastReal = { x: e.clientX, y: e.clientY };
+    if (e.isTrusted) lastReal = { x: e.clientX, y: e.clientY };
   }, true);
 
-  function safePoint(cv) {
+  /* ===== 地图视口矩形 ==================================================== */
+
+  function mapRect(cv) {
     var r = cv.getBoundingClientRect();
+    return {
+      left:   r.left + r.width * EDGE_RATIO.left,
+      top:    r.top + r.height * EDGE_RATIO.top,
+      right:  r.left + r.width * EDGE_RATIO.right,
+      bottom: r.top + r.height * EDGE_RATIO.bottom
+    };
+  }
+
+  function homePoint(cv) {
+    var m = mapRect(cv);
     var p = lastReal;
-    if (!p || p.x < r.left || p.x > r.right || p.y < r.top || p.y > r.bottom) {
-      p = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    if (!p || p.x < m.left || p.x > m.right || p.y < m.top || p.y > m.bottom) {
+      p = { x: (m.left + m.right) / 2, y: (m.top + m.bottom) / 2 };
     }
     return p;
   }
 
-  /* ===== 累计位移 → 方向 ================================================= */
+  /* ===== 模式：合成光标贴边 ============================================== */
 
+  var cur = null;            // 合成光标当前位置
+  var heldDir = null;
+  var lastWheelAt = 0;
   var accX = 0, accY = 0;
+  var holdTimer = null;
+  var sweepToken = 0;
+  var stats = { wheel: 0, edge: 0, lastTarget: null };
 
-  function dirOf(dx, dy) {
-    if (Math.abs(dy) >= Math.abs(dx)) {
-      return Math.abs(dy) >= MIN_STEP ? (dy > 0 ? 'down' : 'up') : null;
-    }
-    return Math.abs(dx) >= MIN_STEP ? (dx > 0 ? 'right' : 'left') : null;
+  function sendMove(cv, x, y) {
+    cur = { x: x, y: y };
+    cv.dispatchEvent(mouseEvent('mousemove', x, y, 0, 0));
   }
 
-  /* ===== 模式一：Ctrl + 方向键 ========================================== */
+  function edgeTarget(cv, dir) {
+    var m = mapRect(cv);
+    var base = cur || homePoint(cv);
+    var x = clamp(base.x, m.left + 8, m.right - 8);
+    var y = clamp(base.y, m.top + 8, m.bottom - 8);
 
-  var held = null;
-  var ctrlHeld = false;
-  var repeatTimer = null;
-  var stats = { wheel: 0, press: 0 };
+    if (dir === 'down') y = m.bottom - EDGE_DEPTH;
+    else if (dir === 'up') y = m.top + EDGE_DEPTH;
+    else if (dir === 'right') x = m.right - EDGE_DEPTH;
+    else if (dir === 'left') x = m.left + EDGE_DEPTH;
 
-  function ctrlPress(dir) {
-    if (held === dir) return;
-    ctrlRelease();
-    held = dir;
-    stats.press++;
-
-    if (!ctrlHeld) {
-      dispatch(keyEvent('keydown', CTRL, true));
-      ctrlHeld = true;
-    }
-    dispatch(keyEvent('keydown', ARROW[dir], true));
-
-    // 事件式处理需要重复事件才能持续；状态式处理无副作用
-    repeatTimer = setInterval(function () {
-      if (held !== dir) return;
-      dispatch(keyEvent('keydown', ARROW[dir], true));
-    }, REPEAT_MS);
+    return { x: x, y: y };
   }
 
-  function ctrlRelease() {
-    if (repeatTimer) { clearInterval(repeatTimer); repeatTimer = null; }
-    if (held) {
-      var k = ARROW[held];
-      held = null;
-      dispatch(keyEvent('keyup', k, true));
+  // 从当前位置平滑扫到目标点：即使目标略有偏差，中途也会穿过边缘触发区
+  function sweepTo(cv, target, ms, cb) {
+    var from = cur ? { x: cur.x, y: cur.y } : { x: target.x, y: target.y };
+    var token = ++sweepToken;
+    var t0 = (window.performance && performance.now) ? performance.now() : Date.now();
+
+    (function step() {
+      if (token !== sweepToken) return;
+      var now = (window.performance && performance.now) ? performance.now() : Date.now();
+      var k = ms <= 0 ? 1 : Math.min(1, (now - t0) / ms);
+      sendMove(cv, from.x + (target.x - from.x) * k, from.y + (target.y - from.y) * k);
+      if (k < 1) requestAnimationFrame(step);
+      else if (cb) cb();
+    })();
+  }
+
+  function edgeEngage(cv, dir) {
+    var t = edgeTarget(cv, dir);
+    stats.edge++;
+    stats.lastTarget = { dir: dir, x: Math.round(t.x), y: Math.round(t.y) };
+
+    if (heldDir !== dir) {
+      heldDir = dir;
+      sweepTo(cv, t, SWEEP_MS, null);
+    } else {
+      // 同方向持续，短暂校正即可
+      sendMove(cv, t.x, t.y);
     }
-    if (ctrlHeld) {
-      ctrlHeld = false;
-      dispatch(keyEvent('keyup', CTRL, false));
+
+    if (!holdTimer) {
+      // 停在边缘反复"报位置"：引擎按帧读取光标位置判断是否贴边
+      holdTimer = setInterval(function () {
+        if (!heldDir) return;
+        var cv2 = getCanvas();
+        if (!cv2) return;
+        var tt = edgeTarget(cv2, heldDir);
+        cv2.dispatchEvent(mouseEvent('mousemove', tt.x, tt.y, 0, 0));
+        cur = tt;
+      }, REPEAT_MS);
     }
   }
 
-  /* ===== 模式二 / 三：合成鼠标拖动（左键 / 右键） ======================== */
+  function edgeRelease() {
+    if (holdTimer) { clearInterval(holdTimer); holdTimer = null; }
+    if (!heldDir) return;
+    heldDir = null;
+    accX = accY = 0;
+    var cv = getCanvas();
+    if (!cv) return;
+    sweepTo(cv, homePoint(cv), BACK_MS, null);
+  }
 
-  var BTN = MODE === 'rdrag' ? { button: 2, mask: 2 } : { button: 0, mask: 1 };
+  /* ===== 模式：合成鼠标拖动 ============================================== */
 
   var drag = { on: false, x: 0, y: 0, cv: null, moved: 0 };
 
   function dragStart(cv) {
-    var p = safePoint(cv);
-    var r = cv.getBoundingClientRect();
+    var p = homePoint(cv);
     drag.on = true;
     drag.cv = cv;
     drag.moved = 0;
-    // 起手点取真实指针位置（不在画布内则取中心）
     drag.x = p.x;
     drag.y = p.y;
     cv.dispatchEvent(mouseEvent('mousedown', drag.x, drag.y, BTN.button, BTN.mask));
-    return r;
   }
 
   function dragMove(dx, dy) {
@@ -221,27 +246,24 @@
     if (!cv) return;
     var r = cv.getBoundingClientRect();
 
-    // 拖地图：想看到更下面的内容 → 地图往上推 → 指针向上移动
+    // 拖地图：想看更下面的内容 → 地图往上推 → 指针向上移动
     var nx = drag.x - dx * DRAG_SCALE;
     var ny = drag.y - dy * DRAG_SCALE;
 
-    // 棘轮：快撞到边界时，先结束当前拖拽、从中心重新起手，再接着走剩余位移。
-    // 引擎按位移增量平移地图，所以重起手不会让地图跳。
+    // 棘轮：快撞到画布内边界时，先结束当前拖拽、从中心重新起手再接着走。
+    // 引擎按位移增量平移地图，重起手不会让地图跳。
     var ix = r.width * DRAG_INSET;
     var iy = r.height * DRAG_INSET;
     if (nx < r.left + ix || nx > r.right - ix || ny < r.top + iy || ny > r.bottom - iy) {
       cv.dispatchEvent(mouseEvent('mouseup', drag.x, drag.y, BTN.button, 0));
-      drag.on = false;
       drag.x = r.left + r.width / 2;
       drag.y = r.top + r.height / 2;
       drag.moved = 0;
       cv.dispatchEvent(mouseEvent('mousedown', drag.x, drag.y, BTN.button, BTN.mask));
-      drag.on = true;
       nx = drag.x - dx * DRAG_SCALE;
       ny = drag.y - dy * DRAG_SCALE;
-      // 兜底夹紧，防止单次位移过大再次越界
-      nx = Math.min(Math.max(nx, r.left + ix), r.right - ix);
-      ny = Math.min(Math.max(ny, r.top + iy), r.bottom - iy);
+      nx = clamp(nx, r.left + ix, r.right - ix);
+      ny = clamp(ny, r.top + iy, r.bottom - iy);
     }
 
     drag.x = nx;
@@ -257,44 +279,38 @@
     drag.cv = null;
     if (!cv) return;
     cv.dispatchEvent(mouseEvent('mouseup', drag.x, drag.y, BTN.button, 0));
-    // 指针不能停在边缘，否则会误触发引擎自带的「边缘滚动」
-    var p = safePoint(cv);
+    // 指针不能停在边缘，否则会误触发引擎自带的边缘滚动
+    var p = homePoint(cv);
     cv.dispatchEvent(mouseEvent('mousemove', p.x, p.y, 0, 0));
   }
 
-  /* ===== 空闲收尾 ======================================================== */
+  /* ===== 方向判定与空闲收尾 ============================================== */
 
-  var lastWheelAt = 0;
-
-  function tickIdle() {
-    if (Date.now() - lastWheelAt <= HOLD_MS) return;
-    if (MODE === 'ctrl') {
-      if (held) { ctrlRelease(); accX = accY = 0; }
-    } else {
-      if (drag.on) dragEnd();
+  function dirOf(dx, dy) {
+    if (Math.abs(dy) >= Math.abs(dx)) {
+      return Math.abs(dy) >= MIN_STEP ? (dy > 0 ? 'down' : 'up') : null;
     }
+    return Math.abs(dx) >= MIN_STEP ? (dx > 0 ? 'right' : 'left') : null;
   }
-
-  /* ===== 统一入口 ======================================================== */
 
   function onWheel(e) {
     var cv = getCanvas();
     if (!cv || !inCanvas(e, cv)) return;
 
-    // 挡掉页面滚动与触控板横滑返回上一页
     try { e.preventDefault(); } catch (err) { /* passive 时无法阻止 */ }
 
-    var px = toPixels(e);
     stats.wheel++;
     lastWheelAt = Date.now();
 
-    if (MODE === 'ctrl') {
+    var px = toPixels(e);
+
+    if (MODE === 'edge') {
       accX += px.x;
       accY += px.y;
       var d = dirOf(accX, accY);
       if (d) {
-        if (d !== held) { accX = accY = 0; }
-        ctrlPress(d);
+        if (d !== heldDir) { accX = accY = 0; }
+        edgeEngage(cv, d);
       }
       return;
     }
@@ -302,6 +318,14 @@
     if (!drag.on) dragStart(cv);
     dragMove(px.x, px.y);
   }
+
+  function tickIdle() {
+    if (Date.now() - lastWheelAt <= HOLD_MS) return;
+    if (MODE === 'edge') { if (heldDir) edgeRelease(); }
+    else { if (drag.on) dragEnd(); }
+  }
+
+  /* ===== 装配 ============================================================ */
 
   try {
     window.addEventListener('wheel', onWheel, { passive: false, capture: true });
@@ -316,37 +340,35 @@
     if (MODE === 'rdrag' && drag.on) e.preventDefault();
   }, true);
 
-  // 失焦 / 切后台时强制收尾，避免"卡住"
-  window.addEventListener('blur', function () { ctrlRelease(); dragEnd(); });
+  window.addEventListener('blur', function () { edgeRelease(); dragEnd(); });
   document.addEventListener('visibilitychange', function () {
-    if (document.hidden) { ctrlRelease(); dragEnd(); }
+    if (document.hidden) { edgeRelease(); dragEnd(); }
   });
 
-  /* ===== 对外接口（调试用） ============================================== */
+  /* ===== 调试接口 ======================================================== */
 
   window.__h3TouchScroll = {
     mode: MODE,
+    ratio: EDGE_RATIO,
     stats: stats,
-    get held() { return held; },
+    get dir() { return heldDir; },
     get dragging() { return drag.on; },
-    get ctrlHeld() { return ctrlHeld; },
-    stop: function () { ctrlRelease(); dragEnd(); },
-    nudge: function (dir, times) {
-      var n = times || 1;
-      for (var i = 0; i < n; i++) {
-        (function (ii) {
-          setTimeout(function () {
-            lastWheelAt = Date.now();
-            if (MODE === 'ctrl') ctrlPress(dir);
-          }, ii * 90);
-        })(i);
-      }
-      setTimeout(function () { lastWheelAt = 0; }, n * 90 + 10);
+    get pointer() { return cur; },
+    mapRect: function () { var cv = getCanvas(); return cv ? mapRect(cv) : null; },
+    stop: function () { edgeRelease(); dragEnd(); },
+    // 手动跑一次，便于排查：__h3TouchScroll.nudge('down')
+    nudge: function (dir) {
+      var cv = getCanvas();
+      if (!cv) return '没有画布';
+      lastWheelAt = Date.now();
+      if (MODE === 'edge') edgeEngage(cv, dir || 'down');
+      return stats.lastTarget;
     }
   };
 
   log('已启用，模式 = ' + MODE + (
-    MODE === 'ctrl' ? '（Ctrl + 方向键，卷地图而非移动英雄）'
+    MODE === 'edge' ? '（光标贴边，触发引擎原生边缘滚动）'
       : MODE === 'drag' ? '（需在游戏内开启「左键拖动地图」）'
         : '（需在游戏内开启「右键拖动地图」）'));
+  log('视口比例:', JSON.stringify(EDGE_RATIO));
 })();
