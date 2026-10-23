@@ -26,11 +26,13 @@
        Data/ 目录不存在时静默退出，不影响启动器自带的手动选文件流程。 -->
   <script defer src="autoload.js"></script>
 
-  <!-- 触控板 / 触摸卷动适配：把 Mac 触控板双指滑动（wheel 事件）翻译成引擎认识的
-       方向键，从而卷动冒险地图。默认开启，模式可用 URL 参数切换：
-         ?touchscroll=key   默认，合成方向键，不依赖游戏内设置
-         ?touchscroll=drag  合成鼠标左键拖动，手感 1:1，需先开启「左键拖动地图」
-         ?touchscroll=0     关闭 -->
+  <!-- 触控板 / 触摸卷动适配：把 Mac 触控板双指滑动（wheel 事件）翻译成引擎认识的操作，
+       从而卷动冒险地图（注意：不能翻译成纯方向键——那是控制英雄行走的）。
+       默认开启，模式可用 URL 参数切换：
+         ?touchscroll=ctrl   默认，Ctrl+方向键，不需改游戏设置
+         ?touchscroll=drag   合成鼠标左键拖动，1:1 跟手，需开启「左键拖动地图」
+         ?touchscroll=rdrag  合成鼠标右键拖动，1:1 跟手，需开启「右键拖动地图」
+         ?touchscroll=0      关闭 -->
   <script defer src="touch-scroll.js"></script>
 
   <script type="module" crossorigin src="vcmi/launcher/vcmi-launcher.js"></script>

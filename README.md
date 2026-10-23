@@ -359,23 +359,35 @@ VCMI 1.6.5 内置了完整的触摸与拖动支持，只是**默认关着**。�
 ### 10.2 Mac 触控板：`touch-scroll.js`
 
 触控板双指滑动在浏览器里产生的是 `wheel` 事件，而引擎没有把滚轮绑到地图卷动。
-`touch-scroll.js` 把它翻译成引擎认识的事件：
+`touch-scroll.js` 把它翻译成引擎认识的操作：
 
 | 模式 | URL 参数 | 原理 | 前置条件 |
 |---|---|---|---|
-| `key`（默认） | `?touchscroll=key` | wheel → 合成**方向键按住/释放** | 无（方向键是 H3 原生卷图方式） |
-| `drag` | `?touchscroll=drag` | wheel → 合成**鼠标左键拖动** | 需先开启「左键拖动地图」 |
+| `ctrl`（默认） | `?touchscroll=ctrl` | wheel → 合成 **Ctrl + 方向键** | 无，不需改任何游戏设置 |
+| `drag` | `?touchscroll=drag` | wheel → 合成**鼠标左键拖动**，1:1 跟手 | 需开启「左键拖动地图」 |
+| `rdrag` | `?touchscroll=rdrag` | wheel → 合成**鼠标右键拖动**，1:1 跟手 | 需开启「右键拖动地图」 |
 | 关闭 | `?touchscroll=0` | 不加载任何逻辑 | — |
+
+> ⚠️ **踩过的坑：不能翻译成纯方向键。**
+> H3 里方向键控制的是**英雄行走**，不是卷地图。VCMI 官方文档写的是
+> `[LCtrl] + Arrows — scrolls Adventure Map` —— **必须带 LCtrl 才是卷地图**。
+> 第一版漏了 Ctrl，结果双指滑动把英雄走起来了。不要把这条改回去。
 
 实现要点：
 
 - 只在**游戏画布**上生效，启动器页面自动不介入
 - `preventDefault` 掉浏览器自身的页面滚动与触控板**侧滑返回上一页**
-- 手指停下 `HOLD_MS=130ms` 后释放按键；按住期间每 `55ms` 重复派发 `keydown`，
+- `ctrl` 模式会先单独发一次 `keydown Control`，再发带 `ctrlKey=true` 的方向键 ——
+  兼容"引擎自己跟踪修饰键状态"和"只读事件上的 ctrlKey"两种实现
+- 手指停下 `HOLD_MS=130ms` 后释放；按住期间每 `55ms` 重复派发 `keydown`，
   以同时兼容「状态式」与「事件式」两种按键处理逻辑
-- 页面失焦 / 切换到后台时强制释放，避免"卡住一直滚"
+- 拖拽模式做了**棘轮**：指针快撞到画布内边界时先 `mouseup`、从中心重新 `mousedown` 接着拖。
+  引擎按位移增量平移地图，所以重起手不会让地图跳；否则长距离滑动会"拖到头就停"
+- 拖拽结束把指针送回原位/中心，否则指针停在边缘会误触发引擎自带的**边缘滚动**
+- 页面失焦 / 切换到后台时强制收尾，避免"卡住一直动"
 
-参数都在文件头部，可按手感调整：`HOLD_MS`（滑行时长）、`REPEAT_MS`（重复间隔）、`MIN_STEP`（触发阈值）。
+参数都在文件头部，可按手感调整：`HOLD_MS`（滑行时长）、`REPEAT_MS`（重复间隔）、
+`MIN_STEP`（触发阈值）、`DRAG_SCALE`（拖拽倍率）、`DRAG_INSET`（棘轮阈值）。
 
 **回滚**：删掉 `touch-scroll.js` 与 `index.html` 里的
 `<script defer src="touch-scroll.js"></script>` 那一行；或临时在地址后加 `?touchscroll=0`。
@@ -390,10 +402,13 @@ VCMI 1.6.5 内置了完整的触摸与拖动支持，只是**默认关着**。�
 
 ### 10.4 已知限制
 
-- 合成的是 `wheel → 方向键`，**滚动速度由游戏内「地图卷动速度」决定**，不是 1:1 跟手；
-  想要跟手可切 `?touchscroll=drag`。
-- 引擎是否接收到合成事件，取决于它的监听目标。本地已用真实浏览器验证过
-  「wheel → keydown/keyup 正确合成且 `defaultPrevented=true`」；
-  **真机（Mac 触控板）手感需实测微调**，见 10.2 的参数说明。
+- `ctrl` 模式的滚动速度受游戏内「地图卷动速度」影响，不是 1:1 跟手。
+  想要跟手的拖拽手感，用 `?touchscroll=drag`（需先开「左键拖动地图」）。
+- `ctrl` 模式依赖引擎把 `Ctrl + 方向键` 认作卷地图。本地已验证合成事件正确
+  （`Control#17` 先按下，`ArrowDown#40 ctrl=true` 跟随，释放顺序正确），
+  但**引擎是否响应仍需真机确认** —— 若双指滑动仍在移动英雄，说明该组合没被识别，
+  改用 `drag` / `rdrag`。
+- iPad 上能否跑起整个游戏尚未验证：iOS Safari 的 `SharedArrayBuffer` 需要 cross-origin
+  isolated（本站已有 `COOP/COEP`），但 256.62 MiB 资源进 MEMFS 可能触发单页内存上限。
 - iPad 上能否跑起整个游戏尚未验证：iOS Safari 的 `SharedArrayBuffer` 需要 cross-origin
   isolated（本站已有 `COOP/COEP`），但 256.62 MiB 资源进 MEMFS 可能触发单页内存上限。
